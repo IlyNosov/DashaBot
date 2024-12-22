@@ -22,7 +22,7 @@ services:
       - db
     environment:
       DATABASE_URL: "postgresql://bot_user:bot_password@db:5432/bot_db"
-      TELEGRAM_TOKEN: "7737544614:AAHukKHbItD_-qm72klAPdHrZYBeWtbld-0"
+      TELEGRAM_TOKEN: "YOUR_TOKEN"
 
 volumes:
   db-data:
