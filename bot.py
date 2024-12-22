@@ -1,10 +1,68 @@
+import os
 import telebot
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
-token = 'TOKEN'
+token = os.getenv('TELEGRAM_TOKEN')
 bot = telebot.TeleBot(token)
 
-whitelists = {}
-users = {}
+DATABASE_URL = os.getenv('DATABASE_URL')
+
+
+def get_db_connection():
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+
+
+def create_tables():
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS whitelists (
+                    chat_id BIGINT NOT NULL,
+                    username TEXT NOT NULL,
+                    PRIMARY KEY (chat_id, username)
+                )
+            ''')
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    username TEXT NOT NULL PRIMARY KEY,
+                    user_id BIGINT NOT NULL
+                )
+            ''')
+            conn.commit()
+
+
+create_tables()
+
+
+def add_user_to_whitelist(chat_id, username):
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO whitelists (chat_id, username) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (chat_id, username)
+            )
+            conn.commit()
+
+
+def is_user_in_whitelist(chat_id, username):
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM whitelists WHERE chat_id = %s AND username = %s",
+                (chat_id, username)
+            )
+            return cur.fetchone() is not None
+
+
+def add_user_to_database(username, user_id):
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (username, user_id) VALUES (%s, %s) ON CONFLICT (username) DO UPDATE SET user_id = EXCLUDED.user_id",
+                (username, user_id)
+            )
+            conn.commit()
 
 
 def is_admin(chat_id, user_id):
@@ -16,24 +74,22 @@ def is_admin(chat_id, user_id):
 def start(message):
     bot.send_message(
         message.chat.id,
-        'Привет! Я помогу организовать белый список для вашего нового чата! Добавьте меня в группу, чтобы начать '
-        'работу.'
+        'Привет! Я помогу организовать белый список для вашего нового чата! '
+        'Добавьте меня в группу, чтобы начать работу.'
     )
 
 
 @bot.message_handler(content_types=['new_chat_members'])
 def new_chat_members(message):
-    global whitelists
     for user in message.new_chat_members:
         if user.id != bot.get_me().id:
-            wl = whitelists.get(message.chat.id, [])
             username = f"@{user.username}" if user.username else user.first_name
-            if username not in users:
-                users[username] = user.id
-            if username not in wl:
+            add_user_to_database(username, user.id)
+            if not is_user_in_whitelist(message.chat.id, username):
                 if not is_admin(message.chat.id, bot.get_me().id):
-                    bot.send_message(message.chat.id, f'Пользователь {username} не состоит в белом списке! Он был '
-                                                      f'удален из чата, поскольку у меня нет прав администратора.')
+                    bot.send_message(message.chat.id,
+                                     f'Пользователь {username} не состоит в белом списке! '
+                                     f'Он не был удален из чата, поскольку у меня нет прав администратора.')
                     return
                 bot.kick_chat_member(message.chat.id, user.id)
                 bot.send_message(message.chat.id, f'Пользователь {username} удален, так как он не в белом списке.')
@@ -47,22 +103,19 @@ def add(message):
     if not is_admin(message.chat.id, message.from_user.id):
         bot.send_message(message.chat.id, 'У вас нет прав для изменения белого списка.')
         return
-    global whitelists
-    if message.chat.id not in whitelists:
-        whitelists[message.chat.id] = []
     if len(message.entities) < 2:
         bot.send_message(message.chat.id, 'Пожалуйста, укажите @username пользователей, которых нужно добавить.')
         return
-    mentions = [message.text[entity.offset:entity.offset + entity.length]
-                for entity in message.entities if entity.type == 'mention']
+    mentions = [message.text[entity.offset:entity.offset + entity.length] for entity in message.entities if
+                entity.type == 'mention']
     if not mentions:
         bot.send_message(message.chat.id, 'Пожалуйста, укажите хотя бы одного пользователя для добавления.')
         return
     added = []
     skipped = []
     for username in mentions:
-        if username not in whitelists[message.chat.id]:
-            whitelists[message.chat.id].append(username)
+        if not is_user_in_whitelist(message.chat.id, username):
+            add_user_to_whitelist(message.chat.id, username)
             added.append(username)
         else:
             skipped.append(username)
@@ -82,41 +135,41 @@ def remove(message):
     if not is_admin(message.chat.id, message.from_user.id):
         bot.send_message(message.chat.id, 'У вас нет прав для изменения белого списка.')
         return
-    if not is_admin(message.chat.id, bot.get_me().id):
-        bot.send_message(message.chat.id, 'Для работы мне необходимы права администратора.')
-        return
-    global whitelists
-    if message.chat.id not in whitelists or len(whitelists[message.chat.id]) == 0:
-        bot.send_message(message.chat.id, 'Белый список для этой группы пуст.')
-        return
     if len(message.entities) < 2:
         bot.send_message(message.chat.id, 'Пожалуйста, укажите @username пользователей, которых нужно удалить.')
         return
-    mentions = [message.text[entity.offset:entity.offset + entity.length]
-                for entity in message.entities if entity.type == 'mention']
+    mentions = [message.text[entity.offset:entity.offset + entity.length] for entity in message.entities if
+                entity.type == 'mention']
     if not mentions:
         bot.send_message(message.chat.id, 'Пожалуйста, укажите хотя бы одного пользователя для удаления.')
         return
     removed = []
     skipped = []
     for username in mentions:
-        if username in whitelists[message.chat.id]:
-            whitelists[message.chat.id].remove(username)
-            if username in users:
-                bot.kick_chat_member(message.chat.id, users[username])
-            removed.append(username)
-        else:
-            skipped.append(username)
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM whitelists WHERE chat_id = %s AND username = %s",
+                            (message.chat.id, username))
+                user = cur.fetchone()
+                if user:
+                    cur.execute("DELETE FROM whitelists WHERE chat_id = %s AND username = %s",
+                                (message.chat.id, username))
+                    conn.commit()
+                    cur.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+                    user_id = cur.fetchone()['user_id']
+                    if is_admin(message.chat.id, bot.get_me().id):
+                        bot.kick_chat_member(message.chat.id, user_id)
+                    removed.append(username)
+                else:
+                    skipped.append(username)
     response = ''
     if removed:
         response += f'Удалены: {", ".join(removed)}\n'
     if skipped:
         response += f'Пропущены (не найдены): {", ".join(skipped)}'
+    if not is_admin(message.chat.id, bot.get_me().id):
+        response += '\n\nПользователи не были удалены из чата, так как у меня нет прав администратора.'
     bot.send_message(message.chat.id, response.strip())
-    for username in removed:
-        if username in users:
-            bot.send_message(message.chat.id, f'Пользователь {username} удален из чата.')
-            bot.kick_chat_member(message.chat.id, users[username])
 
 
 @bot.message_handler(commands=['whitelist'])
@@ -124,12 +177,15 @@ def whitelist(message):
     if message.chat.type == 'private':
         bot.send_message(message.chat.id, 'Эта команда работает только в группах.')
         return
-    global whitelists
-    if message.chat.id not in whitelists or len(whitelists[message.chat.id]) == 0:
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT username FROM whitelists WHERE chat_id = %s", (message.chat.id,))
+            users = cur.fetchall()
+    if not users:
         bot.send_message(message.chat.id, 'Белый список для этой группы пуст.')
         return
-    bot.send_message(message.chat.id, 'Список пользователей белого списка: ' +
-                     ', '.join(whitelists[message.chat.id]))
+    bot.send_message(message.chat.id,
+                     'Список пользователей белого списка: ' + ', '.join(user['username'] for user in users))
 
 
 bot.infinity_polling()
