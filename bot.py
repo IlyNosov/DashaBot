@@ -172,7 +172,7 @@ def remove(message):
     bot.send_message(message.chat.id, response.strip())
 
 
-@bot.message_handler(commands=['whitelist'])
+@bot.message_handler(commands=['list'])
 def whitelist(message):
     if message.chat.type == 'private':
         bot.send_message(message.chat.id, 'Эта команда работает только в группах.')
