@@ -164,6 +164,7 @@ def remove(message):
         return
     removed = []
     skipped = []
+    kicked = False
     for username in mentions:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
@@ -178,6 +179,7 @@ def remove(message):
                     conn.commit()
                     if is_admin(message.chat.id, bot.get_me().id) and is_user_in_chat(message.chat.id, user_id):
                         bot.kick_chat_member(message.chat.id, user_id)
+                        kicked = True
                     removed.append(username)
                 else:
                     skipped.append(username)
@@ -186,7 +188,7 @@ def remove(message):
         response += f'Удалены: {", ".join(removed)}\n'
     if skipped:
         response += f'Пропущены: {", ".join(skipped)}'
-    if not is_admin(message.chat.id, bot.get_me().id) and removed:
+    if not is_admin(message.chat.id, bot.get_me().id) and removed and kicked:
         response += '\n\nПользователи не были удалены из чата, так как у меня нет прав администратора.'
     bot.send_message(message.chat.id, response.strip())
 
