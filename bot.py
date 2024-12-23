@@ -177,9 +177,10 @@ def remove(message):
                     cur.execute("DELETE FROM whitelists WHERE chat_id = %s AND username = %s",
                                 (message.chat.id, username))
                     conn.commit()
-                    if is_admin(message.chat.id, bot.get_me().id) and is_user_in_chat(message.chat.id, user_id):
-                        bot.kick_chat_member(message.chat.id, user_id)
+                    if is_user_in_chat(message.chat.id, user_id):
                         kicked = True
+                        if is_admin(message.chat.id, bot.get_me().id):
+                            bot.kick_chat_member(message.chat.id, user_id)
                     removed.append(username)
                 else:
                     skipped.append(username)
